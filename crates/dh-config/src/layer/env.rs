@@ -1,6 +1,6 @@
 //! The environment-variable layer.
 
-use super::{parse_scalar, Layer, LayerContext};
+use super::{parse_raw_value, Layer, LayerContext};
 use crate::error::ConfigError;
 use crate::value::Value;
 
@@ -23,17 +23,25 @@ use crate::value::Value;
 /// booleans, numeric strings become numbers, everything else stays a string.
 /// Disable with [`Env::parse_values`]`(false)`.
 ///
+/// To let a variable carry a whole array (a `Vec` field is otherwise
+/// unreachable from the environment), opt into a list separator:
+/// [`Env::list_separator`]`(",")` turns `APP_CORS__ORIGINS=a.com, b.com`
+/// into `["a.com", "b.com"]`. It is opt-in because commas appear in many
+/// legitimate scalar values (URLs, DSNs).
+///
 /// ```
 /// use dh_config::{Config, Env};
 ///
 /// let config = Config::builder()
 ///     .with_layer(
 ///         Env::prefixed("APP")
+///             .list_separator(",")
 ///             // `source` replaces `std::env::vars()`; also handy for .env files.
-///             .source([("APP_SERVER__PORT".to_string(), "9000".to_string())]),
+///             .source([("APP_SERVER__PORT", "9000"), ("APP_TAGS", "a, b")]),
 ///     )
 ///     .build()?;
 /// assert_eq!(config.get::<u16>("server.port")?, 9000);
+/// assert_eq!(config.get::<Vec<String>>("tags")?, vec!["a", "b"]);
 /// # Ok::<(), dh_config::ConfigError>(())
 /// ```
 #[derive(Clone, Debug)]
@@ -41,6 +49,7 @@ pub struct Env {
     prefix: Option<String>,
     separator: String,
     parse_values: bool,
+    list_separator: Option<String>,
     source: Option<Vec<(String, String)>>,
 }
 
@@ -52,6 +61,7 @@ impl Env {
             prefix: None,
             separator: "__".to_string(),
             parse_values: true,
+            list_separator: None,
             source: None,
         }
     }
@@ -78,10 +88,25 @@ impl Env {
         self
     }
 
+    /// Splits values containing `separator` into arrays (elements trimmed),
+    /// so `APP_TAGS=a, b` becomes `["a", "b"]`. Off by default.
+    pub fn list_separator(mut self, separator: impl Into<String>) -> Self {
+        self.list_separator = Some(separator.into());
+        self
+    }
+
     /// Replaces `std::env::vars()` with an explicit variable list. Useful for
     /// tests and for feeding in `.env`-file contents.
-    pub fn source(mut self, vars: impl IntoIterator<Item = (String, String)>) -> Self {
-        self.source = Some(vars.into_iter().collect());
+    pub fn source<K, V>(mut self, vars: impl IntoIterator<Item = (K, V)>) -> Self
+    where
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.source = Some(
+            vars.into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        );
         self
     }
 
@@ -126,11 +151,7 @@ impl Layer for Env {
             let Some(segments) = self.key_path(&name) else {
                 continue;
             };
-            let value = if self.parse_values {
-                parse_scalar(&raw)
-            } else {
-                Value::String(raw)
-            };
+            let value = parse_raw_value(&raw, self.parse_values, self.list_separator.as_deref());
             root.set_path(&segments.join("."), value);
         }
         Ok(root)
@@ -198,6 +219,31 @@ mod tests {
     fn parsing_can_be_disabled() {
         let root = load(Env::prefixed("APP").parse_values(false), &[("APP_B", "42")]);
         assert_eq!(root.get_path("b"), Some(&Value::String("42".to_string())));
+    }
+
+    #[test]
+    fn list_separator_splits_values() {
+        let root = load(
+            Env::prefixed("APP").list_separator(","),
+            &[
+                ("APP_TAGS", "a, b,c"),
+                ("APP_PORTS", "1,2"),
+                ("APP_ONE", "x"),
+            ],
+        );
+        assert_eq!(
+            root.get_path("tags"),
+            Some(&Value::Array(vec![
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into()),
+            ]))
+        );
+        assert_eq!(
+            root.get_path("ports"),
+            Some(&Value::Array(vec![Value::Integer(1), Value::Integer(2)]))
+        );
+        assert_eq!(root.get_path("one"), Some(&Value::String("x".into())));
     }
 
     #[test]

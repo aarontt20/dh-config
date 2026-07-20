@@ -424,6 +424,179 @@ fn round_trip_serialize_deserialize() {
 }
 
 #[test]
+fn extract_collapses_build_and_deserialize() {
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Small {
+        name: String,
+    }
+
+    let small: Small = Config::builder()
+        .with_file(fixture("app.toml"))
+        .extract()
+        .unwrap();
+    assert_eq!(small.name, "fixture-app");
+
+    // Layer errors surface through extract too.
+    let error = Config::builder()
+        .with_file(fixture("nope.toml"))
+        .extract::<Small>()
+        .unwrap_err();
+    assert!(matches!(error, ConfigError::Io { .. }), "{error}");
+}
+
+#[test]
+fn with_file_accepts_paths_and_configured_files() {
+    // &str, PathBuf, and a configured File all flow through with_file.
+    let config = Config::builder()
+        .with_file(fixture("app.toml"))
+        .with_file(File::new(fixture("nope.toml")).required(false))
+        .build()
+        .unwrap();
+    assert_eq!(config.get::<String>("name").unwrap(), "fixture-app");
+
+    let path_str = fixture("app.toml").to_string_lossy().to_string();
+    let config = Config::builder()
+        .with_file(path_str.as_str())
+        .build()
+        .unwrap();
+    assert_eq!(config.get::<String>("name").unwrap(), "fixture-app");
+}
+
+#[test]
+fn env_lists_reach_vec_fields() {
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct WithLists {
+        origins: Vec<String>,
+        ports: Vec<u16>,
+        single: Vec<String>,
+    }
+
+    let config = Config::builder()
+        .with_layer(Env::prefixed("T3").list_separator(",").source([
+            ("T3_ORIGINS", "a.com, b.com"),
+            ("T3_PORTS", "80,443"),
+            // No separator: stays scalar, coerced to a one-element list.
+            ("T3_SINGLE", "only"),
+        ]))
+        .build()
+        .unwrap();
+
+    let lists: WithLists = config.deserialize().unwrap();
+    assert_eq!(lists.origins, vec!["a.com", "b.com"]);
+    assert_eq!(lists.ports, vec![80, 443]);
+    assert_eq!(lists.single, vec!["only"]);
+}
+
+#[test]
+fn cli_lists_override_file_arrays() {
+    let config = Config::builder()
+        .with_file(fixture("app.toml"))
+        .with_layer(cli(&["--peers=x.example,y.example"]).list_separator(","))
+        .build()
+        .unwrap();
+    // The CLI array replaces the file's array-of-tables wholesale.
+    assert_eq!(
+        config.get::<Vec<String>>("peers").unwrap(),
+        vec!["x.example", "y.example"]
+    );
+}
+
+#[test]
+fn origin_names_the_supplying_layer() {
+    let config = Config::builder()
+        .with_layer(
+            Defaults::new()
+                .set("server.port", 1)
+                .set("only.default", true),
+        )
+        .with_file(fixture("app.toml"))
+        .with_layer(Env::prefixed("T4").source([("T4_SERVER__PORT", "9000")]))
+        .build()
+        .unwrap();
+
+    // The env layer wins server.port, so it owns the origin.
+    assert_eq!(config.origin("server.port"), Some("environment (T4_*)"));
+    // Values untouched by higher layers keep their origin.
+    assert_eq!(config.origin("only.default"), Some("defaults"));
+    assert!(config.origin("server.host").unwrap().contains("app.toml"));
+    // Arrays are replaced wholesale, so paths inside them resolve to the
+    // layer that supplied the array.
+    assert!(config.origin("peers.0.host").unwrap().contains("app.toml"));
+    // Tables are composites and missing paths don't exist: no origin.
+    assert_eq!(config.origin("server"), None);
+    assert_eq!(config.origin("missing.key"), None);
+}
+
+#[test]
+fn explain_dumps_values_with_origins() {
+    let config = Config::builder()
+        .with_file(fixture("app.toml"))
+        .with_layer(Env::prefixed("T5").source([("T5_SERVER__PORT", "9000")]))
+        .profile("prod")
+        .build()
+        .unwrap();
+
+    let explain = config.explain();
+    assert!(explain.contains("profile: prod"), "{explain}");
+    assert!(
+        explain.contains("server.port = 9000  [environment (T5_*)]"),
+        "{explain}"
+    );
+    // Strings are quoted so "9000" and 9000 are distinguishable.
+    assert!(explain.contains("server.host = \"0.0.0.0\""), "{explain}");
+}
+
+#[test]
+fn type_errors_name_the_supplying_layer() {
+    let config = Config::builder()
+        .with_layer(Overrides::new().set("server.port", true))
+        .with_layer(Env::prefixed("T6").source([("T6_SERVER__PORT", "not-a-number")]))
+        .build()
+        .unwrap();
+
+    let error = config.get::<u16>("server.port").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("server.port"), "{message}");
+    assert!(
+        message.contains("value set by layer `environment (T6_*)`"),
+        "{message}"
+    );
+
+    // The same enrichment applies during whole-tree deserialization, and the
+    // reported path is absolute even though the failure is nested.
+    #[derive(Debug, Deserialize)]
+    struct Nested {
+        #[allow(dead_code)]
+        server: NestedServer,
+    }
+    #[derive(Debug, Deserialize)]
+    struct NestedServer {
+        #[allow(dead_code)]
+        port: u16,
+    }
+    let message = config.deserialize::<Nested>().unwrap_err().to_string();
+    assert!(message.contains("server.port"), "{message}");
+    assert!(message.contains("environment (T6_*)"), "{message}");
+}
+
+#[test]
+fn get_on_subtree_reports_absolute_paths() {
+    #[derive(Debug, Deserialize)]
+    struct ServerOnly {
+        #[allow(dead_code)]
+        port: Vec<u8>, // wrong on purpose
+    }
+
+    let config = Config::builder()
+        .with_layer(Overrides::new().set("server.port", "not-a-number"))
+        .build()
+        .unwrap();
+
+    let message = config.get::<ServerOnly>("server").unwrap_err().to_string();
+    assert!(message.contains("server.port"), "{message}");
+}
+
+#[test]
 fn profile_from_env_reads_variable() {
     // Set an env var name unlikely to collide; tests may run in parallel but
     // only this test touches it.

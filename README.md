@@ -37,7 +37,7 @@ fn main() -> Result<(), dh_config::ConfigError> {
         //    `prod` profile is active.
         .with_file("config/app.toml")
         // 3. An optional developer-local file (any supported format).
-        .with_layer(File::new("config/local.yaml").required(false))
+        .with_file(File::new("config/local.yaml").required(false))
         // 4. Environment: APP_SERVER__PORT=9000 → server.port.
         .with_env("APP")
         // 5. Highest precedence: --server.port=7000 --verbose, no clap needed.
@@ -52,6 +52,16 @@ fn main() -> Result<(), dh_config::ConfigError> {
     let _ = (app.verbose, port);
     Ok(())
 }
+```
+
+When the typed struct is all you need, `extract()` collapses the last two
+steps into one:
+
+```rust,ignore
+let app: AppConfig = Config::builder()
+    .with_file("config/app.toml")
+    .with_env("APP")
+    .extract()?;
 ```
 
 ## The layering model
@@ -107,6 +117,26 @@ This is also the intended integration point for real CLI parsers: parse
 arguments however you like (clap, lexopt, by hand), then emit the results as
 a layer.
 
+## Provenance: "who set this?"
+
+The merge records which layer supplied every value:
+
+```rust,ignore
+config.origin("server.port");   // Some("environment (APP_*)")
+println!("{}", config.explain());
+// profile: prod
+// server.host = "0.0.0.0"  [file (config/app.toml)]
+// server.port = 9000  [environment (APP_*)]
+// ...
+```
+
+Type errors name the supplying layer automatically, so a bad override is
+traced in one read:
+
+```text
+at `server.port`: expected u16, found boolean (value set by layer `environment (APP_*)`)
+```
+
 ## Profiles
 
 Select a profile explicitly (`.profile("prod")`) or from an environment
@@ -130,6 +160,21 @@ single `_` stays part of the key. Values parse leniently (`"true"` → bool,
 `"8080"` → integer) unless disabled with `.parse_values(false)`, and the
 deserializer is symmetric-lenient in the other direction, so a string-typed
 field still accepts a numeric-looking value.
+
+### Lists from env and CLI
+
+`Vec` fields are reachable from single-string sources via an opt-in list
+separator — opt-in because commas appear in legitimate scalar values (URLs,
+DSNs):
+
+```rust,ignore
+.with_layer(Env::prefixed("APP").list_separator(","))          // APP_CORS__ORIGINS=a.com,b.com
+.with_layer(CommandLine::from_env().list_separator(","))       // --cors.origins=a.com,b.com
+```
+
+A value without the separator stays scalar, and the deserializer coerces a
+lone scalar into a one-element sequence, so `APP_TAGS=a` and `APP_TAGS=a,b`
+both fill a `Vec<String>`.
 
 ## Cargo features
 

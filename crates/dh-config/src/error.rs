@@ -56,31 +56,68 @@ pub enum ConfigError {
         expected: String,
         /// The kind of value that was actually there.
         found: &'static str,
+        /// The layer that supplied the offending value, when known.
+        origin: Option<String>,
     },
     /// A free-form error, mostly produced by serde during (de)serialization.
     Message(String),
 }
 
 impl ConfigError {
-    /// Prefixes serde-produced errors with the key path they occurred at, so
-    /// `config.get::<u16>("server.port")` failures name the full path.
+    /// Annotates serde-produced errors with the path the deserializer is at.
+    /// `TypeMismatch` already carries its own (absolute) path, so only an
+    /// empty one is filled in; free-form messages are wrapped once.
     pub(crate) fn with_path_context(self, path: &str) -> Self {
         if path.is_empty() {
             return self;
         }
         match self {
-            ConfigError::Message(message) => {
+            // Nested `deserialize_any` calls each apply context as the error
+            // bubbles up; only the innermost (deepest path) wrap is kept.
+            ConfigError::Message(message) if !message.starts_with("at `") => {
                 ConfigError::Message(format!("at `{path}`: {message}"))
             }
             ConfigError::TypeMismatch {
                 path: inner,
                 expected,
                 found,
+                origin,
             } if inner.is_empty() => ConfigError::TypeMismatch {
                 path: path.to_string(),
                 expected,
                 found,
+                origin,
             },
+            other => other,
+        }
+    }
+
+    /// Re-roots an error produced while deserializing the subtree at `base`
+    /// (a `Config::get` lookup), so its path is absolute: a failure at
+    /// `port` inside `get("server")` reports `server.port`.
+    pub(crate) fn prefixed_with(self, base: &str) -> Self {
+        match self {
+            ConfigError::TypeMismatch {
+                path,
+                expected,
+                found,
+                origin,
+            } => {
+                let path = if path.is_empty() {
+                    base.to_string()
+                } else {
+                    format!("{base}.{path}")
+                };
+                ConfigError::TypeMismatch {
+                    path,
+                    expected,
+                    found,
+                    origin,
+                }
+            }
+            ConfigError::Message(message) => {
+                ConfigError::Message(format!("at `{base}`: {message}"))
+            }
             other => other,
         }
     }
@@ -125,12 +162,17 @@ impl fmt::Display for ConfigError {
                 path,
                 expected,
                 found,
+                origin,
             } => {
                 if path.is_empty() {
-                    write!(f, "expected {expected}, found {found}")
+                    write!(f, "expected {expected}, found {found}")?;
                 } else {
-                    write!(f, "at `{path}`: expected {expected}, found {found}")
+                    write!(f, "at `{path}`: expected {expected}, found {found}")?;
                 }
+                if let Some(origin) = origin {
+                    write!(f, " (value set by layer `{origin}`)")?;
+                }
+                Ok(())
             }
             ConfigError::Message(message) => f.write_str(message),
         }

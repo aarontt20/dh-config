@@ -36,7 +36,7 @@
 //!     //    `prod` profile is active.
 //!     .with_file("config/app.toml")
 //!     // 3. An optional, developer-local file.
-//!     .with_layer(File::new("config/local.toml").required(false))
+//!     .with_file(File::new("config/local.toml").required(false))
 //!     // 4. Environment: APP_SERVER__PORT=9000 → server.port.
 //!     .with_env("APP")
 //!     // 5. Highest precedence: --server.port=7000 --verbose, no clap needed.
@@ -51,6 +51,9 @@
 //! # Ok::<(), dh_config::ConfigError>(())
 //! ```
 //!
+//! When the typed struct is all you need, [`ConfigBuilder::extract`]
+//! collapses `build()` + `deserialize()` into one call.
+//!
 //! ## Layering model
 //!
 //! Every layer produces a [`Value`] tree with a table at its root. The
@@ -62,6 +65,17 @@
 //!   there is no element-wise splicing.
 //! * **Explicit nulls override** — a higher layer can deliberately unset a
 //!   value by writing `null`.
+//!
+//! ## Provenance
+//!
+//! The merge records which layer supplied every value. [`Config::origin`]
+//! answers "who set this?" for one path, [`Config::explain`] dumps the whole
+//! resolved configuration with sources (made for startup logs), and type
+//! errors automatically name the supplying layer:
+//!
+//! ```text
+//! at `server.port`: expected u16, found boolean (value set by layer `environment (APP_*)`)
+//! ```
 //!
 //! ## Custom layers
 //!

@@ -137,6 +137,7 @@ impl<'de> ValueDeserializer<'de> {
             path: self.path.clone(),
             expected: expected.to_string(),
             found: self.value.type_name(),
+            origin: None,
         }
     }
 }
@@ -311,9 +312,52 @@ impl<'de> Deserializer<'de> for ValueDeserializer<'de> {
         self.deserialize_unit(visitor)
     }
 
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, ConfigError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.value {
+            // A lone scalar coerces to a single-element sequence, so an
+            // env-provided `APP_TAGS=a` fills a `Vec<String>` just like
+            // `APP_TAGS=a,b` does once split by a list separator.
+            Value::Bool(_) | Value::Integer(_) | Value::Float(_) | Value::String(_) => visitor
+                .visit_seq(SingleElementSeq {
+                    value: Some(self.value),
+                    path: &self.path,
+                }),
+            _ => self.deserialize_any(visitor),
+        }
+    }
+
     serde::forward_to_deserialize_any! {
-        char bytes byte_buf seq tuple tuple_struct map struct identifier
+        char bytes byte_buf tuple tuple_struct map struct identifier
         ignored_any
+    }
+}
+
+/// Backs the scalar→sequence coercion in `deserialize_seq`.
+struct SingleElementSeq<'de, 'p> {
+    value: Option<&'de Value>,
+    path: &'p str,
+}
+
+impl<'de> SeqAccess<'de> for SingleElementSeq<'de, '_> {
+    type Error = ConfigError;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, ConfigError>
+    where
+        T: DeserializeSeed<'de>,
+    {
+        match self.value.take() {
+            Some(value) => seed
+                .deserialize(ValueDeserializer::at(value, self.path, "0"))
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn size_hint(&self) -> Option<usize> {
+        Some(self.value.is_some() as usize)
     }
 }
 
@@ -423,6 +467,7 @@ impl<'de> VariantAccess<'de> for VariantDeserializer<'de, '_> {
                 path: self.path.to_string(),
                 expected: format!("unit variant `{}` with no payload", self.variant),
                 found: value.type_name(),
+                origin: None,
             }),
         }
     }

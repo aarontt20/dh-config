@@ -130,6 +130,32 @@ impl File {
     }
 }
 
+// Path-like conversions so `ConfigBuilder::with_file` accepts a bare path
+// and a configured `File` interchangeably.
+impl From<&str> for File {
+    fn from(path: &str) -> Self {
+        File::new(path)
+    }
+}
+
+impl From<String> for File {
+    fn from(path: String) -> Self {
+        File::new(path)
+    }
+}
+
+impl From<PathBuf> for File {
+    fn from(path: PathBuf) -> Self {
+        File::new(path)
+    }
+}
+
+impl From<&Path> for File {
+    fn from(path: &Path) -> Self {
+        File::new(path)
+    }
+}
+
 impl Layer for File {
     fn name(&self) -> String {
         format!("file ({})", self.path.display())

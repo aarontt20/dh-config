@@ -66,6 +66,31 @@ pub trait Layer {
     fn load(&self, cx: &LayerContext<'_>) -> Result<Value, ConfigError>;
 }
 
+/// Parses a raw env/CLI value: optionally splits it into an array on a list
+/// separator (elements trimmed), then applies scalar parsing per element. A
+/// value without the separator stays scalar — combined with the
+/// deserializer's scalar→sequence coercion, both `TAGS=a` and `TAGS=a,b`
+/// can fill a `Vec`.
+pub(crate) fn parse_raw_value(raw: &str, parse: bool, list_separator: Option<&str>) -> Value {
+    let scalar = |item: &str| {
+        if parse {
+            parse_scalar(item)
+        } else {
+            Value::String(item.to_string())
+        }
+    };
+    if let Some(separator) = list_separator {
+        if raw.contains(separator) {
+            return Value::Array(
+                raw.split(separator)
+                    .map(|item| scalar(item.trim()))
+                    .collect(),
+            );
+        }
+    }
+    scalar(raw)
+}
+
 /// Parses a scalar string the way the env and CLI layers do: `true`/`false`
 /// become booleans, then integers, then floats, and anything else stays a
 /// string.

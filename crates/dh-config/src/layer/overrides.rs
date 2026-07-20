@@ -1,7 +1,7 @@
 //! Programmatic override layers: explicit key/value overrides and a
 //! dependency-free command-line layer.
 
-use super::{parse_scalar, Layer, LayerContext};
+use super::{parse_raw_value, Layer, LayerContext};
 use crate::error::ConfigError;
 use crate::value::Value;
 
@@ -62,12 +62,16 @@ impl Layer for Overrides {
 /// without a flag schema, `--flag positional` and `--key value` are
 /// indistinguishable, and a config layer should never guess. Use `=`.
 ///
+/// Like [`Env`](crate::Env), an opt-in [`CommandLine::list_separator`] lets
+/// one argument carry an array: `--tags=a,b` → `["a", "b"]`.
+///
 /// ```
 /// use dh_config::{CommandLine, Config};
 ///
-/// let args = ["--server.port=9090", "--verbose", "positional"];
 /// let config = Config::builder()
-///     .with_layer(CommandLine::from_args(args.iter().map(|s| s.to_string())))
+///     .with_layer(
+///         CommandLine::from_args(["--server.port=9090", "--verbose", "positional"]),
+///     )
 ///     .build()?;
 /// assert_eq!(config.get::<u16>("server.port")?, 9090);
 /// assert!(config.get::<bool>("verbose")?);
@@ -76,6 +80,7 @@ impl Layer for Overrides {
 #[derive(Clone, Debug)]
 pub struct CommandLine {
     args: Vec<String>,
+    list_separator: Option<String>,
 }
 
 impl CommandLine {
@@ -84,14 +89,27 @@ impl CommandLine {
     pub fn from_env() -> Self {
         CommandLine {
             args: std::env::args().skip(1).collect(),
+            list_separator: None,
         }
     }
 
     /// Uses an explicit argument list instead of the process arguments.
-    pub fn from_args(args: impl IntoIterator<Item = String>) -> Self {
+    pub fn from_args<I, S>(args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         CommandLine {
-            args: args.into_iter().collect(),
+            args: args.into_iter().map(Into::into).collect(),
+            list_separator: None,
         }
+    }
+
+    /// Splits values containing `separator` into arrays (elements trimmed),
+    /// so `--tags=a, b` becomes `["a", "b"]`. Off by default.
+    pub fn list_separator(mut self, separator: impl Into<String>) -> Self {
+        self.list_separator = Some(separator.into());
+        self
     }
 }
 
@@ -111,7 +129,10 @@ impl Layer for CommandLine {
                 continue;
             };
             let (key, value) = match key.split_once('=') {
-                Some((key, value)) => (key, parse_scalar(value)),
+                Some((key, value)) => (
+                    key,
+                    parse_raw_value(value, true, self.list_separator.as_deref()),
+                ),
                 // Bare `--flag` is a boolean.
                 None => (key, Value::Bool(true)),
             };
@@ -129,7 +150,7 @@ mod tests {
     use super::*;
 
     fn load(args: &[&str]) -> Value {
-        CommandLine::from_args(args.iter().map(|s| s.to_string()))
+        CommandLine::from_args(args.iter().copied())
             .load(&LayerContext::default())
             .unwrap()
     }
@@ -165,5 +186,22 @@ mod tests {
     fn empty_value_stays_string() {
         let root = load(&["--name="]);
         assert_eq!(root.get_path("name"), Some(&Value::String(String::new())));
+    }
+
+    #[test]
+    fn list_separator_splits_values() {
+        let root = CommandLine::from_args(["--tags=a, b", "--single=x"])
+            .list_separator(",")
+            .load(&LayerContext::default())
+            .unwrap();
+        assert_eq!(
+            root.get_path("tags"),
+            Some(&Value::Array(vec![
+                Value::String("a".into()),
+                Value::String("b".into())
+            ]))
+        );
+        // No separator in the value → stays scalar.
+        assert_eq!(root.get_path("single"), Some(&Value::String("x".into())));
     }
 }

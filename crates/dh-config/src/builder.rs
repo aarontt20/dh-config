@@ -73,13 +73,21 @@ impl ConfigBuilder {
         }
     }
 
-    /// Adds a required file layer (see [`File`](crate::File) for format
-    /// inference, extension probing, and profile overlays). For an optional
-    /// file or other tweaks, add a configured `File` via
-    /// [`with_layer`](ConfigBuilder::with_layer).
+    /// Adds a file layer (see [`File`](crate::File) for format inference,
+    /// extension probing, and profile overlays). Accepts anything convertible
+    /// to a `File`, so a plain path and a configured layer both work:
+    ///
+    /// ```no_run
+    /// # use dh_config::{Config, File};
+    /// let config = Config::builder()
+    ///     .with_file("config/app.toml")
+    ///     .with_file(File::new("config/local.toml").required(false))
+    ///     .build()?;
+    /// # Ok::<(), dh_config::ConfigError>(())
+    /// ```
     #[cfg(any(feature = "json", feature = "toml", feature = "yaml"))]
-    pub fn with_file(self, path: impl Into<std::path::PathBuf>) -> Self {
-        self.with_layer(crate::layer::File::new(path))
+    pub fn with_file(self, file: impl Into<crate::layer::File>) -> Self {
+        self.with_layer(file.into())
     }
 
     /// Adds an environment layer for variables prefixed `<prefix>_` (see
@@ -105,6 +113,30 @@ impl ConfigBuilder {
         self
     }
 
+    /// Builds the configuration and deserializes it straight into `T` — the
+    /// shorthand for the common case where the typed struct is all you want.
+    ///
+    /// ```no_run
+    /// # use dh_config::Config;
+    /// # use serde::Deserialize;
+    /// #[derive(Deserialize)]
+    /// struct AppConfig {
+    ///     workers: u32,
+    /// }
+    ///
+    /// let app: AppConfig = Config::builder()
+    ///     .with_file("config/app.toml")
+    ///     .with_env("APP")
+    ///     .extract()?;
+    /// # Ok::<(), dh_config::ConfigError>(())
+    /// ```
+    ///
+    /// Use [`build`](ConfigBuilder::build) instead when you also need dynamic
+    /// lookups, the active profile, or provenance queries.
+    pub fn extract<T: serde::de::DeserializeOwned>(self) -> Result<T, ConfigError> {
+        self.build()?.deserialize()
+    }
+
     /// Loads every layer, merges them in order, and returns the resolved
     /// [`Config`].
     pub fn build(self) -> Result<Config, ConfigError> {
@@ -122,12 +154,19 @@ impl ConfigBuilder {
         };
 
         let mut root = Value::Table(Table::new());
+        let mut layer_names = Vec::with_capacity(self.layers.len());
+        let mut origins = std::collections::BTreeMap::new();
         for layer in &self.layers {
             let loaded = layer.load(&cx)?;
+            let layer_index = layer_names.len();
+            layer_names.push(layer.name());
             match loaded {
                 // An empty layer contributes nothing.
                 Value::Null => {}
-                table @ Value::Table(_) => root.merge_from(table),
+                table @ Value::Table(_) => {
+                    record_origins(&table, "", layer_index, &mut origins);
+                    root.merge_from(table);
+                }
                 other => {
                     return Err(ConfigError::InvalidRoot {
                         layer: layer.name(),
@@ -136,7 +175,35 @@ impl ConfigBuilder {
                 }
             }
         }
-        Ok(Config::from_parts(root, profile))
+        Ok(Config::from_parts(root, profile, layer_names, origins))
+    }
+}
+
+/// Records, for every leaf (non-table) value in a layer's tree, the index of
+/// the layer that supplied it. Later layers overwrite earlier entries, which
+/// mirrors the merge: tables merge (so their leaves are tracked one by one)
+/// and everything else replaces.
+fn record_origins(
+    value: &Value,
+    prefix: &str,
+    layer_index: usize,
+    origins: &mut std::collections::BTreeMap<String, usize>,
+) {
+    let Value::Table(table) = value else {
+        return;
+    };
+    for (key, child) in table {
+        let path = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        match child {
+            Value::Table(_) => record_origins(child, &path, layer_index, origins),
+            _ => {
+                origins.insert(path, layer_index);
+            }
+        }
     }
 }
 

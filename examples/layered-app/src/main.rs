@@ -7,6 +7,7 @@
 //! APP_PROFILE=prod cargo run -p layered-app
 //! APP_SERVER__PORT=9000 cargo run -p layered-app
 //! cargo run -p layered-app -- --server.port=7000 --verbose
+//! APP_PROFILE=prod cargo run -p layered-app -- --explain
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -77,12 +78,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .set("server.port", 8080),
         )
         .with_file(config_dir.join("app.toml"))
-        .with_layer(File::new(config_dir.join("local.yaml")).required(false))
-        .with_layer(Env::prefixed("APP"))
+        .with_file(File::new(config_dir.join("local.yaml")).required(false))
+        .with_layer(Env::prefixed("APP").list_separator(","))
         .with_layer(RuntimeInfo)
-        .with_layer(CommandLine::from_env())
+        .with_layer(CommandLine::from_env().list_separator(","))
         .profile_from_env("APP_PROFILE")
         .build()?;
+
+    // `--explain` prints every resolved value with the layer it came from.
+    if config.get_or("explain", false)? {
+        print!("{}", config.explain());
+        return Ok(());
+    }
 
     println!("profile: {}", config.profile().unwrap_or("(none)"));
 
@@ -94,6 +101,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "dynamic: server.port={port} runtime.pid={pid} verbose={}",
         app.verbose
+    );
+    println!(
+        "origin:  server.port came from `{}`",
+        config.origin("server.port").unwrap_or("unknown")
     );
     println!(
         "summary: listening on {}:{}, db {} (pool {}), log {:?}/{}",
