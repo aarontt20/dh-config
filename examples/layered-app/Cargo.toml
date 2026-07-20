@@ -1,0 +1,10 @@
+[package]
+name = "layered-app"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dh-config = { workspace = true }
+serde = { workspace = true, features = ["derive"] }

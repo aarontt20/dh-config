@@ -1,0 +1,22 @@
+[package]
+name = "dh-config"
+version = "0.1.0"
+description = "A from-scratch layered configuration library: files, env vars, defaults, CLI args, and custom layers merged with a programmatic builder."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["json", "toml", "yaml"]
+json = ["dep:serde_json"]
+toml = ["dep:toml"]
+yaml = ["dep:serde_yaml"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+serde_yaml = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }

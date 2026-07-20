@@ -1,0 +1,15 @@
+# Base configuration, shipped with the app.
+
+verbose = false
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[database]
+url = "postgres://localhost/app_dev"
+pool_size = 5
+
+[log]
+level = "info"
+format = "pretty"

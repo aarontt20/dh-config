@@ -1,0 +1,4 @@
+{
+  "server": { "workers": 4 },
+  "features": { "new_ui": true }
+}

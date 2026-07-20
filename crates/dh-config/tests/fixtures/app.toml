@@ -1,0 +1,14 @@
+name = "fixture-app"
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[log]
+level = "info"
+
+[[peers]]
+host = "a.example"
+
+[[peers]]
+host = "b.example"

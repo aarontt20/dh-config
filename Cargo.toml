@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/dh-config", "examples/layered-app"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aarontt20/dh-config"
+
+[workspace.dependencies]
+dh-config = { path = "crates/dh-config" }
+serde = "1"
+serde_json = "1"
+toml = "0.8"
+serde_yaml = "0.9"

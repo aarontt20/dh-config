@@ -1,0 +1,12 @@
+# Overlay applied on top of app.toml when the `prod` profile is active
+# (APP_PROFILE=prod). Only the differences live here.
+
+[server]
+host = "0.0.0.0"
+
+[database]
+url = "postgres://db.internal/app"
+pool_size = 32
+
+[log]
+format = "json"

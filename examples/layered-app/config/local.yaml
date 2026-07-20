@@ -1,0 +1,4 @@
+# Optional developer-local overrides, mixed format on purpose: YAML layers
+# merge with TOML layers seamlessly. Delete this file and the app still runs.
+log:
+  level: debug

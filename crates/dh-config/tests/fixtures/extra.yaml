@@ -1,0 +1,4 @@
+log:
+  format: json
+features:
+  beta: false
