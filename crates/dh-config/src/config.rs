@@ -1,6 +1,6 @@
 //! The resolved, merged configuration: [`Config`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::de::DeserializeOwned;
 
@@ -28,6 +28,8 @@ pub struct Config {
     layer_names: Vec<String>,
     /// Leaf path → index (into `layer_names`) of the layer that supplied it.
     origins: BTreeMap<String, usize>,
+    /// Paths whose value was changed by placeholder expansion.
+    expanded: BTreeSet<String>,
 }
 
 impl Config {
@@ -41,12 +43,14 @@ impl Config {
         profile: Option<String>,
         layer_names: Vec<String>,
         origins: BTreeMap<String, usize>,
+        expanded: BTreeSet<String>,
     ) -> Self {
         Config {
             root,
             profile,
             layer_names,
             origins,
+            expanded,
         }
     }
 
@@ -122,7 +126,10 @@ impl Config {
     /// profile: prod
     /// server.host = "0.0.0.0"  [file (config/app.toml)]
     /// server.port = 7000  [command line]
+    /// database.url = "postgres://db:5432/app"  [file (config/app.toml), expanded]
     /// ```
+    ///
+    /// Values rewritten by placeholder expansion carry an `expanded` marker.
     pub fn explain(&self) -> String {
         let mut out = String::new();
         if let Some(profile) = &self.profile {
@@ -134,9 +141,32 @@ impl Config {
         collect_leaves(&self.root, String::new(), &mut leaves);
         for (path, value) in leaves {
             let origin = self.origin(&path).unwrap_or("unknown");
-            out.push_str(&format!("{path} = {}  [{origin}]\n", render(value)));
+            let expanded = if self.is_expanded(&path) {
+                ", expanded"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "{path} = {}  [{origin}{expanded}]\n",
+                render(value)
+            ));
         }
         out
+    }
+
+    /// Returns `true` if the value at `path` was rewritten by placeholder
+    /// expansion — either directly, or by living inside a spliced table.
+    fn is_expanded(&self, path: &str) -> bool {
+        let mut candidate = path;
+        loop {
+            if self.expanded.contains(candidate) {
+                return true;
+            }
+            match candidate.rsplit_once('.') {
+                Some((parent, _)) => candidate = parent,
+                None => return false,
+            }
+        }
     }
 
     /// The raw merged value tree.

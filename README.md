@@ -176,6 +176,58 @@ A value without the separator stays scalar, and the deserializer coerces a
 lone scalar into a one-element sequence, so `APP_TAGS=a` and `APP_TAGS=a,b`
 both fill a `Vec<String>`.
 
+## Placeholder expansion
+
+Opt in with `.expand_placeholders()` and string values can reference other
+configuration values, or environment variables, with optional defaults:
+
+```toml
+[database]
+host = "db.internal"
+port = 5432
+url  = "postgres://${database.host}:${database.port}/app"
+pass = "${env:DB_PASSWORD:-dev-password}"
+```
+
+```rust,ignore
+let config = Config::builder()
+    .with_file("config/app.toml")
+    .with_env("APP")
+    .expand_placeholders()
+    .build()?;
+```
+
+Expansion runs **after** all layers are merged, so references see final
+values: `APP_DATABASE__PORT=6432` changes both `database.port` *and* the
+`database.url` derived from it. Any layer can carry placeholders (files,
+defaults, env, CLI, custom layers) and any value can be referenced,
+regardless of which layer supplied either side.
+
+The rules:
+
+* `${dotted.path}` references the merged tree (array indices work:
+  `${peers.0.host}`); `${env:VAR}` reads the process environment directly.
+* `${…:-default}` supplies a fallback for a missing path or variable;
+  without one, a dangling reference fails `build()` with the path and the
+  layer that supplied the template.
+* A string that is *exactly* one placeholder splices the referenced value
+  with its type preserved — `"${database.port}"` stays an integer, and
+  referencing a whole table copies it (a cheap anchor/alias). A placeholder
+  inside longer text renders scalars into the string; null, tables, and
+  arrays are errors there.
+* `$$` escapes a literal `$` (so `$${HOME}` renders as `${HOME}`); a lone
+  `$` not followed by `{` is left alone. With expansion off (the default),
+  strings pass through completely untouched.
+* Reference cycles are detected and reported with the full chain:
+  `placeholder cycle: `a.url` -> `b.url` -> `a.url``.
+
+`explain()` marks derived values, and provenance follows the template — the
+layer that wrote the placeholder string owns the result:
+
+```text
+database.url = "postgres://db.internal:5432/app"  [file (config/app.toml), expanded]
+```
+
 ## Cargo features
 
 `json`, `toml`, and `yaml` gate the format parsers and are all enabled by

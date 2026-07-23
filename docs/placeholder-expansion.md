@@ -1,6 +1,8 @@
 # Placeholder expansion in config files — feasibility & design
 
-*Status: research / proposal. Nothing here is implemented yet.*
+*Status: **implemented** (approach A) — see `crates/dh-config/src/expand.rs`,
+`ConfigBuilder::expand_placeholders`, and `tests/expansion.rs`. This document
+is kept as the design rationale.*
 
 The feature request: let a config value reference other values, so a file can
 say

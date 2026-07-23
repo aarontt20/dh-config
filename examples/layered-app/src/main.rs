@@ -6,9 +6,13 @@
 //! cargo run -p layered-app
 //! APP_PROFILE=prod cargo run -p layered-app
 //! APP_SERVER__PORT=9000 cargo run -p layered-app
+//! APP_DATABASE__HOST=db.staging cargo run -p layered-app
 //! cargo run -p layered-app -- --server.port=7000 --verbose
 //! APP_PROFILE=prod cargo run -p layered-app -- --explain
 //! ```
+//!
+//! `database.url` is assembled by placeholder expansion, so overriding
+//! `database.host` (or port, or name) from any layer rewrites the URL.
 
 use std::path::{Path, PathBuf};
 
@@ -83,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_layer(RuntimeInfo)
         .with_layer(CommandLine::from_env().list_separator(","))
         .profile_from_env("APP_PROFILE")
+        .expand_placeholders()
         .build()?;
 
     // `--explain` prints every resolved value with the layer it came from.

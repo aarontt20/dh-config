@@ -77,6 +77,22 @@
 //! at `server.port`: expected u16, found boolean (value set by layer `environment (APP_*)`)
 //! ```
 //!
+//! ## Placeholder expansion
+//!
+//! With [`ConfigBuilder::expand_placeholders`] (off by default), string
+//! values may reference other configuration values or environment variables,
+//! with optional defaults:
+//!
+//! ```toml
+//! url  = "postgres://${database.host}:${database.port}/app"
+//! pass = "${env:DB_PASSWORD:-dev-password}"
+//! ```
+//!
+//! References resolve against the *merged* tree, so a value overridden by a
+//! higher layer flows into every string derived from it. See the method docs
+//! for the full syntax (type-preserving whole-string references, `$$`
+//! escaping, cycle detection).
+//!
 //! ## Custom layers
 //!
 //! Implement [`Layer`] for any configuration source; see the trait docs for
@@ -95,6 +111,7 @@ mod builder;
 mod config;
 mod de;
 mod error;
+mod expand;
 #[cfg(any(feature = "json", feature = "toml", feature = "yaml"))]
 mod format;
 mod layer;

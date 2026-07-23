@@ -59,6 +59,21 @@ pub enum ConfigError {
         /// The layer that supplied the offending value, when known.
         origin: Option<String>,
     },
+    /// A string value's `${…}` placeholder failed to expand.
+    Expansion {
+        /// The dot-separated path of the string containing the placeholder.
+        path: String,
+        /// What went wrong.
+        message: String,
+        /// The layer that supplied the template string, when known.
+        origin: Option<String>,
+    },
+    /// Placeholder references form a cycle.
+    PlaceholderCycle {
+        /// The chain of key paths forming the cycle; the first path appears
+        /// again at the end.
+        chain: Vec<String>,
+    },
     /// A free-form error, mostly produced by serde during (de)serialization.
     Message(String),
 }
@@ -171,6 +186,27 @@ impl fmt::Display for ConfigError {
                 }
                 if let Some(origin) = origin {
                     write!(f, " (value set by layer `{origin}`)")?;
+                }
+                Ok(())
+            }
+            ConfigError::Expansion {
+                path,
+                message,
+                origin,
+            } => {
+                write!(f, "at `{path}`: {message}")?;
+                if let Some(origin) = origin {
+                    write!(f, " (value set by layer `{origin}`)")?;
+                }
+                Ok(())
+            }
+            ConfigError::PlaceholderCycle { chain } => {
+                f.write_str("placeholder cycle: ")?;
+                for (i, path) in chain.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(" -> ")?;
+                    }
+                    write!(f, "`{path}`")?;
                 }
                 Ok(())
             }

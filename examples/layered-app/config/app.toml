@@ -7,7 +7,12 @@ host = "127.0.0.1"
 port = 8080
 
 [database]
-url = "postgres://localhost/app_dev"
+host = "localhost"
+port = 5432
+name = "app_dev"
+# Derived via placeholder expansion: overriding any piece (profile overlay,
+# env var, CLI flag) flows into the URL.
+url = "postgres://${database.host}:${database.port}/${database.name}"
 pool_size = 5
 
 [log]

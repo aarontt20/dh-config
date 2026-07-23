@@ -38,6 +38,7 @@ enum ProfileSource {
 pub struct ConfigBuilder {
     layers: Vec<Box<dyn Layer>>,
     profile: ProfileSource,
+    expand: bool,
     /// Errors from infallible-looking builder methods (e.g. serializing
     /// defaults), deferred so the chain stays ergonomic and surfaced at
     /// [`ConfigBuilder::build`].
@@ -50,6 +51,7 @@ impl ConfigBuilder {
         ConfigBuilder {
             layers: Vec::new(),
             profile: ProfileSource::None,
+            expand: false,
             deferred_error: None,
         }
     }
@@ -110,6 +112,36 @@ impl ConfigBuilder {
         if !matches!(self.profile, ProfileSource::Explicit(_)) {
             self.profile = ProfileSource::EnvVar(var.into());
         }
+        self
+    }
+
+    /// Enables `${…}` placeholder expansion on the merged configuration
+    /// (off by default).
+    ///
+    /// After all layers are merged, string values may reference other
+    /// configuration values by dotted path, or environment variables via the
+    /// `env:` namespace, with optional shell-style `:-` defaults:
+    ///
+    /// ```toml
+    /// [database]
+    /// host = "db.internal"
+    /// port = 5432
+    /// url  = "postgres://${database.host}:${database.port}/app"
+    /// pass = "${env:DB_PASSWORD:-dev-password}"
+    /// ```
+    ///
+    /// Because expansion runs on the *merged* tree, references see final
+    /// values: overriding `database.port` from any higher layer also changes
+    /// `database.url` here.
+    ///
+    /// A string that is exactly one placeholder splices the referenced value
+    /// with its type (and structure) preserved; a placeholder inside longer
+    /// text renders scalars into the string, and referencing a null, table,
+    /// or array there is an error. `$$` escapes a literal `$`; a lone `$`
+    /// not followed by `{` stays literal. Dangling references and reference
+    /// cycles fail [`build`](ConfigBuilder::build).
+    pub fn expand_placeholders(mut self) -> Self {
+        self.expand = true;
         self
     }
 
@@ -175,7 +207,31 @@ impl ConfigBuilder {
                 }
             }
         }
-        Ok(Config::from_parts(root, profile, layer_names, origins))
+
+        let mut expanded_paths = std::collections::BTreeSet::new();
+        if self.expand {
+            let expanded = crate::expand::expand(&root, &origins, &layer_names)?;
+            // A whole-string placeholder can splice a table where the layer
+            // supplied a string; attribute the new leaves to the layer that
+            // supplied the template, so `origin` keeps answering for them.
+            for path in &expanded.paths {
+                let Some(&layer_index) = origins.get(path) else {
+                    continue;
+                };
+                if let Some(spliced @ Value::Table(_)) = expanded.root.get_path(path) {
+                    record_origins(spliced, path, layer_index, &mut origins);
+                }
+            }
+            root = expanded.root;
+            expanded_paths = expanded.paths;
+        }
+        Ok(Config::from_parts(
+            root,
+            profile,
+            layer_names,
+            origins,
+            expanded_paths,
+        ))
     }
 }
 

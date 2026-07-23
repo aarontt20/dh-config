@@ -5,7 +5,8 @@
 host = "0.0.0.0"
 
 [database]
-url = "postgres://db.internal/app"
+host = "db.internal"
+name = "app"
 pool_size = 32
 
 [log]
